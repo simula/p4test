@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+#
+# SELF — Self-contained User Data Preserving Framework
+# MAC-Learning P4 Switch Controller
+# Copyright (C) 2021 by Thomas Dreibholz
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Contact: dreibh@simula.no
+
+# With digest part based on:
+# https://github.com/nsg-ethz/p4-learning/blob/master/exercises/04-L2_Learning/thrift/solution/l2_learning_controller.py
+
+import nnpy
+import struct
+import sys
+from sswitch_thrift_API import SimpleSwitchThriftAPI
+
+
+class LearningController(object):
+
+   # ###### Constructor #####################################################
+   def __init__(self):
+      self.thrift_port = 9090
+      self.controller = SimpleSwitchThriftAPI(self.thrift_port)
+      self.init()
+
+   # ###### Initialise ######################################################
+   def init(self):
+      self.controller.reset_state()
+      self.init_broadcast_groups()
+
+
+   # ###### Initialise broadcast groups #####################################
+   def init_broadcast_groups(self):
+       portRange = range(0, 4)
+
+       mc_grp_id = 1
+       rid = 0
+       for ingressPorts in portRange:
+           egressPorts = list(portRange)   # Egress: all ports, except the ingress port
+           egressPorts.remove(ingressPorts)
+
+           self.controller.mc_mgrp_create(mc_grp_id)
+           handle = self.controller.mc_node_create(rid, egressPorts)
+           self.controller.mc_node_associate(mc_grp_id, handle)
+           self.controller.table_add("broadcast", "set_mcast_grp",
+                                     [ str(ingressPorts)], [str(mc_grp_id) ])
+           mc_grp_id +=1
+           rid +=1
+
+
+   # ###### Static mapping test #############################################
+   def test1(self):
+      self.controller.table_add("dmac", "forward", ['01:02:03:04:05:06'], ['0'])
+      self.controller.table_add("dmac", "forward", ['01:02:03:aa:bb:cc'], ['1'])
+
+
+   # ###### Learn Address-to-Port mappings ##################################
+   def learnAddressToPortMapping(self, address, port):
+      print('Learning: %02x:%02x:%02x:%02x:%02x:%02x is on port %d' %
+               ( (address >> 40) & 0xff,
+                 (address >> 32) & 0xff,
+                 (address >> 24) & 0xff,
+                 (address >> 16) & 0xff,
+                 (address >> 8)  & 0xff,
+                 address & 0xff,
+                 port) )
+      self.controller.table_add("smac", "NoAction", [str(address)])
+      self.controller.table_add("dmac", "forward", [str(address)], [str(port)])
+
+
+   # ###### Handle incoming digest ##########################################
+   def handleDigest(self, msg):
+      # ====== Digest header ================================================
+      topic, device_id, ctx_id, list_id, buffer_id, num_samples = \
+         struct.unpack("<iQiiQi", msg[:32])
+
+      # ====== Digest payload: MAC + ingress port ===========================
+      starting_index = 32
+      for sample in range(num_samples):
+         mac0, mac1, port = struct.unpack(">LHH", msg[starting_index:starting_index+8])
+         starting_index +=8
+         address = (mac0 << 16) + mac1
+
+         self.learnAddressToPortMapping(address, port)
+
+      # ====== Acknowledge digest ===========================================
+      self.controller.client.bm_learning_ack_buffer(ctx_id, list_id, buffer_id)
+
+
+   # ###### Run controller loop #############################################
+   def run(self):
+      # ====== Subscribe to digest notifications ============================
+      sub = nnpy.Socket(nnpy.AF_SP, nnpy.SUB)
+      notifications_socket = self.controller.client.bm_mgmt_get_info().notifications_socket
+      sub.connect(notifications_socket)
+      sub.setsockopt(nnpy.SUB, nnpy.SUB_SUBSCRIBE, '')
+
+      # NOTE: This seems to need "sudo" permission!!!
+
+     # ====== Main loop ====================================================
+      while True:
+         message = sub.recv()
+         self.handleDigest(message)
+
+
+
+# ###### Main program #######################################################
+controller = LearningController()
+try:
+   controller.run()
+except KeyboardInterrupt:
+   print('\nStopping Controller!')
+   sys.exit(0)

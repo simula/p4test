@@ -1,0 +1,17 @@
+How to run the examples:
+
+1. Forwarding switch (just 2 ports):
+
+Data Plane:
+./run-switch forwarding
+
+There is no control plane here!
+
+
+2. Address-to-Port-mapping-learning switch:
+
+Data Plane:
+./run-switch learning [--verbose]
+
+Control Planer:
+./run-controller learning

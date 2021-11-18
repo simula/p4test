@@ -1,0 +1,67 @@
+#!/bin/bash
+#
+# SELF — Self-contained User Data Preserving Framework
+# Copyright (C) 2021 by Thomas Dreibholz
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+# Contact: dreibh@simula.no
+
+set -e
+
+# ====== Handle arguments ===================================================
+if [ $# -lt 1 ] ; then
+   echo >&2 "Usage: $0 program|--no-program [--verbose]"
+   exit 1
+fi
+
+if [ "$1" != "--no-program" ] ; then
+   PROGRAM="$1.bmv2/$1.json"
+   make ${PROGRAM}
+   if [ ! -e "${PROGRAM}" ] ; then
+      echo >&2 "ERROR: ${PROGRAM} does not exist!"
+      exit 1
+   fi
+else
+   PROGRAM="--no-p4"
+fi
+
+ARGS=""
+shift
+while [ $# -gt 0 ] ; do
+   if [ "$1" == "-verbose" -o "$1" == "--verbose" ] ; then
+      ARGS="--log-console"
+   else
+      echo >&2 "ERROR: Invalid argument $1!"
+      exit 1
+   fi
+   shift
+done
+
+
+# ====== Run switch =========================================================
+
+# Turn OFF Generic Receive Offloading (GRO):
+# Otherwise, the simple_switch will forward reassembled TCP segments,
+# which then get dropped due to incorrect checksum.
+sudo ethtool -K port0 gro off
+sudo ethtool -K port1 gro off
+sudo ethtool -k port0 | grep generic-receive-offload
+sudo ethtool -k port1 | grep generic-receive-offload
+
+sudo simple_switch \
+   --interface 0@port0 \
+   --interface 1@port1.4000 \
+   ${PROGRAM} \
+   ${ARGS}
